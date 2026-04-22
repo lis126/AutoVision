@@ -55,9 +55,33 @@ Infer these from the user request where possible:
 - Role setting: pass with `--role-setting` or `--role-setting-file`.
 - Product/output label: pass with `--product`; for character sheets, use the character or project name.
 - Total rounds: default `1`.
-- Workspace: default `<current workspace>/open-ad-batch-output`.
+- Workspace: default `~/AutoVision/open-ad-batch-runs/<product>-<timestamp>`. Do not write run output into the installed skill directory.
 - Cooldown: default `0`.
 - Aspect ratio: treat `--aspect-ratio` as a preference/API hint. The template may instruct the reasoning model to choose the best vertical ratio for the target model and layout.
+
+## OpenClaw Exec Safety
+
+OpenClaw exec may reject compound shell commands. Do not run:
+
+```bash
+cd path && python scripts/run_batch.py doctor
+Remove-Item .\context.json; python scripts/run_batch.py ...
+```
+
+Use a single direct Python command and set the tool `workdir` to the skill directory:
+
+```bash
+python scripts/run_batch.py doctor
+python scripts/run_batch.py --template hanfu-character-sheet --product "角色名" --role-setting "角色设定" --total 1
+```
+
+If the user does not pass `--workspace`, the script creates a fresh per-task workspace under the user's home directory, not inside the skill folder.
+
+To start over without shell-level delete commands, add:
+
+```bash
+python scripts/run_batch.py --reset --template hanfu-character-sheet --product "角色名" --role-setting "角色设定" --total 1
+```
 
 Default image backend:
 
@@ -164,7 +188,7 @@ Each template should include:
 The script writes `context.json`, logs, and one isolated workspace folder per round:
 
 ```text
-<workspace>/
+~/AutoVision/open-ad-batch-runs/<product>-<timestamp>/
 ├── context.json
 ├── logs/
 │   └── batch_run.log

@@ -38,6 +38,7 @@ DEFAULT_IMAGE_BACKEND = "codex"
 DEFAULT_IMAGE_MODEL = "gpt-image-2-all"
 DEFAULT_IMAGE_API_MODE = "chat"
 DEFAULT_TEXT_MODEL = "gpt-5.4"
+DEFAULT_WORKSPACE_ROOT = Path.home() / "AutoVision" / "open-ad-batch-runs"
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ENV_SOURCES: dict[str, str] = {}
 
@@ -99,6 +100,19 @@ def slugify(text: str) -> str:
     cleaned = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", text.strip(), flags=re.UNICODE)
     cleaned = cleaned.strip("._")
     return cleaned or "product"
+
+
+def default_workspace(product: str | None = None) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return DEFAULT_WORKSPACE_ROOT / f"{slugify(product or 'task')}-{stamp}"
+
+
+def normalize_workspace(value: Any) -> Path | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, Path):
+        return value.expanduser()
+    return Path(str(value)).expanduser()
 
 
 def now_iso() -> str:
@@ -177,6 +191,8 @@ def resolve_template_path(name_or_path: str, workspace: Path) -> Path:
 
 
 def load_template(args: argparse.Namespace) -> dict[str, Any]:
+    if args.workspace is None:
+        args.workspace = DEFAULT_WORKSPACE_ROOT
     path = resolve_template_path(args.template, args.workspace)
     if path.suffix.lower() == ".json":
         with path.open("r", encoding="utf-8") as f:
@@ -247,6 +263,7 @@ def build_text_messages(template: dict[str, Any], values: dict[str, Any]) -> lis
 
 
 def list_templates(workspace: Path) -> None:
+    workspace = workspace or DEFAULT_WORKSPACE_ROOT
     roots = [SKILL_ROOT / "assets" / "templates", workspace / "templates"]
     found = []
     for root in roots:
@@ -314,9 +331,10 @@ def mask_secret(value: str | None) -> str:
 
 
 def doctor(args: argparse.Namespace) -> None:
+    display_workspace = args.workspace or DEFAULT_WORKSPACE_ROOT
     rows = [
         ("skill_root", str(SKILL_ROOT), "detected"),
-        ("workspace", str(args.workspace), "argument/default"),
+        ("workspace", str(display_workspace), "argument/default"),
         ("template", args.template, env_source("AD_TEMPLATE", "AD_TEMPLATE_NAME")),
         ("api_base_url", args.image_base_url or args.text_base_url or "missing", env_source("AD_IMAGE_BASE_URL", "AD_TEXT_BASE_URL", "AD_API_BASE_URL")),
         ("api_key", mask_secret(args.image_api_key or args.text_api_key), env_source("AD_IMAGE_API_KEY", "AD_TEXT_API_KEY", "AD_API_KEY", "OPENAI_API_KEY")),
@@ -663,6 +681,8 @@ def load_context(path: Path, args: argparse.Namespace) -> dict[str, Any]:
 
 
 def status(args: argparse.Namespace) -> None:
+    if args.workspace is None:
+        args.workspace = DEFAULT_WORKSPACE_ROOT
     ctx_path = args.workspace / "context.json"
     if not ctx_path.exists():
         print(f"No context found at {ctx_path}")
@@ -680,12 +700,16 @@ def run(args: argparse.Namespace) -> None:
         image_api_key = prompt_if_missing(args.image_api_key, "Image API key", args.interactive, secret=True)
     text_api_key = args.text_api_key or image_api_key
     args.product = prompt_if_missing(args.product, "Product name", args.interactive)
+    if args.workspace is None:
+        args.workspace = default_workspace(args.product)
     args.workspace.mkdir(parents=True, exist_ok=True)
     args.role_setting = load_role_setting(args)
     args.final_prompt = load_final_prompt(args)
     template = load_template(args)
 
     ctx_path = args.workspace / "context.json"
+    if args.reset and ctx_path.exists():
+        ctx_path.unlink()
     ctx = load_context(ctx_path, args)
     product_dir = args.workspace / "images" / f"{slugify(args.product)}_batch"
     product_dir.mkdir(parents=True, exist_ok=True)
@@ -793,8 +817,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=Path(env_first("AD_WORKSPACE", default=str(Path.cwd() / "open-ad-batch-output"))).expanduser(),
+        default=normalize_workspace(env_first("AD_WORKSPACE")),
+        help="Run workspace. Defaults to ~/AutoVision/open-ad-batch-runs/<product>-<timestamp> so skill installs stay clean.",
     )
+    parser.add_argument("--reset", action="store_true", help="Delete this workspace context.json before running, avoiding shell-level Remove-Item/rm commands.")
     parser.add_argument("--cooldown", type=int, default=int(env_first("AD_COOLDOWN_SECONDS", default=str(DEFAULT_COOLDOWN_SECONDS))))
     parser.add_argument("--aspect-ratio", default=env_first("AD_ASPECT_RATIO", default=DEFAULT_ASPECT_RATIO), help="Optional ratio hint for templates and APIs. Empty means the reasoning model should choose.")
     parser.add_argument("--size", default=env_first("AD_IMAGE_SIZE", default=DEFAULT_SIZE), help="Optional image API size. Empty means do not send a size field.")
