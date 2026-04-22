@@ -144,10 +144,19 @@ Each template should include:
 
 ## Output
 
-The script writes `context.json`, logs, each round's final prompt, and generated image under:
+The script writes `context.json`, logs, and one isolated workspace folder per round:
 
 ```text
-<workspace>/images/<product>_batch/
+<workspace>/
+├── context.json
+├── logs/
+│   └── batch_run.log
+└── images/
+    └── <product>_batch/
+        └── round_001/
+            ├── final_prompt.txt
+            ├── image.png
+            └── manifest.json
 ```
 
 Re-running the same command resumes from `context.json`.

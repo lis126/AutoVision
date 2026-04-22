@@ -541,23 +541,28 @@ def run(args: argparse.Namespace) -> None:
     log(args.workspace, f"Rounds: {start}-{args.total}, cooldown={args.cooldown}s")
 
     for round_num in range(start, args.total + 1):
+        round_dir = product_dir / f"round_{round_num:03d}"
+        round_dir.mkdir(parents=True, exist_ok=True)
         ctx["state"] = "RUNNING"
         ctx["round"] = round_num
+        ctx["round_workspace"] = str(round_dir)
         write_json(ctx_path, ctx)
+        log(args.workspace, f"Round {round_num}/{args.total}: workspace {round_dir}")
         log(args.workspace, f"Round {round_num}/{args.total}: inferring brief")
 
         try:
             brief = infer_brief(args, round_num, used_styles, text_api_key, template)
-            prompt_path = product_dir / f"round_{round_num:03d}_prompt.txt"
+            prompt_path = round_dir / "final_prompt.txt"
             prompt_path.write_text(brief["prompt"], encoding="utf-8")
 
             log(args.workspace, f"Round {round_num}/{args.total}: generating image")
             image_bytes, ext, raw = generate_image(args, image_api_key, brief["prompt"])
-            image_path = product_dir / f"round_{round_num:03d}{ext}"
+            image_path = round_dir / f"image{ext}"
             image_path.write_bytes(image_bytes)
 
             meta = {
                 "round": round_num,
+                "round_workspace": str(round_dir),
                 "status": "ok",
                 "style": brief["style"],
                 "headline": brief["headline"],
@@ -570,17 +575,29 @@ def run(args: argparse.Namespace) -> None:
                 "time": now_iso(),
             }
             if args.save_raw_response:
-                raw_path = product_dir / f"round_{round_num:03d}_raw_response.json"
+                raw_path = round_dir / "raw_response.json"
                 write_json(raw_path, raw)
                 meta["raw_response_path"] = str(raw_path)
+            manifest_path = round_dir / "manifest.json"
+            write_json(manifest_path, meta)
+            meta["manifest_path"] = str(manifest_path)
 
             ctx["done"] = max(int(ctx.get("done", 0)), round_num)
             ctx.setdefault("history", []).append(meta)
             used_styles.append(brief["style"])
             log(args.workspace, f"Saved: {image_path}")
         except Exception as exc:
+            error_meta = {
+                "round": round_num,
+                "round_workspace": str(round_dir),
+                "status": "fail",
+                "error": str(exc),
+                "time": now_iso(),
+            }
+            write_json(round_dir / "manifest.json", error_meta)
             ctx.setdefault("history", []).append({
                 "round": round_num,
+                "round_workspace": str(round_dir),
                 "status": "fail",
                 "error": str(exc),
                 "time": now_iso(),
