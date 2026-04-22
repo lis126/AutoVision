@@ -33,6 +33,7 @@ DEFAULT_TOTAL = 1
 DEFAULT_COOLDOWN_SECONDS = 0
 DEFAULT_TEMPLATE = "hanfu-character-sheet"
 DEFAULT_IMAGE_MODEL = "gpt-image-2-all"
+DEFAULT_IMAGE_API_MODE = "chat"
 DEFAULT_TEXT_MODEL = "gpt-5.4"
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ENV_SOURCES: dict[str, str] = {}
@@ -288,6 +289,7 @@ def configure(args: argparse.Namespace) -> None:
         f"AD_API_BASE_URL={env_quote(base_url)}",
         f"AD_API_KEY={env_quote(api_key)}",
         f"AD_IMAGE_MODEL={env_quote(image_model)}",
+        f"AD_IMAGE_API_MODE={env_quote(DEFAULT_IMAGE_API_MODE)}",
         f"AD_TEXT_MODEL={env_quote(text_model)}",
         f"AD_IMAGE_RESPONSE_FORMAT={env_quote(response_format)}",
     ]
@@ -313,7 +315,8 @@ def doctor(args: argparse.Namespace) -> None:
         ("api_key", mask_secret(args.image_api_key or args.text_api_key), env_source("AD_IMAGE_API_KEY", "AD_TEXT_API_KEY", "AD_API_KEY", "OPENAI_API_KEY")),
         ("text_model", args.text_model or "missing", env_source("AD_TEXT_MODEL")),
         ("image_model", args.image_model or "missing", env_source("AD_IMAGE_MODEL")),
-        ("image_endpoint", args.image_endpoint or "OpenAI-compatible /images/generations", env_source("AD_IMAGE_ENDPOINT")),
+        ("image_api_mode", args.image_api_mode, env_source("AD_IMAGE_API_MODE")),
+        ("image_endpoint", args.image_endpoint or ("OpenAI-compatible /chat/completions" if args.image_api_mode == "chat" else "OpenAI-compatible /images/generations"), env_source("AD_IMAGE_ENDPOINT")),
         ("text_endpoint", args.text_endpoint or "OpenAI-compatible /chat/completions", env_source("AD_TEXT_ENDPOINT")),
         ("image_response_format", args.response_format or "not sent", env_source("AD_IMAGE_RESPONSE_FORMAT")),
         ("aspect_ratio", args.aspect_ratio or "not sent; reasoning model chooses", env_source("AD_ASPECT_RATIO")),
@@ -383,6 +386,31 @@ def download_url(url: str, timeout: int) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "open-ad-batch/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
+
+
+def decode_image_reference(ref: str, timeout: int) -> tuple[bytes, str]:
+    ref = ref.strip()
+    if ref.startswith("http://") or ref.startswith("https://"):
+        parsed = urllib.parse.urlparse(ref)
+        return download_url(ref, timeout), Path(parsed.path).suffix or ".png"
+    if ref.lower().startswith("data:") and "," in ref:
+        header, b64 = ref.split(",", 1)
+        mime = header.split(";", 1)[0].replace("data:", "")
+        return base64.b64decode(b64), mimetypes.guess_extension(mime) or ".png"
+    return base64.b64decode(ref), ".png"
+
+
+def extract_image_reference(text: str) -> str | None:
+    markdown = re.search(r"!\[[^\]]*\]\(([^)]+)\)", text)
+    if markdown:
+        return markdown.group(1).strip()
+    data_url = re.search(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+", text)
+    if data_url:
+        return data_url.group(0).replace("\n", "").replace(" ", "")
+    url = re.search(r"https?://[^\s)\"']+", text)
+    if url:
+        return url.group(0)
+    return None
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -474,6 +502,12 @@ def build_fallback_prompt(args: argparse.Namespace, style: str, used_styles: lis
 
 def parse_image_response(data: dict[str, Any], timeout: int) -> tuple[bytes, str]:
     item: Any = None
+    if isinstance(data.get("choices"), list) and data["choices"]:
+        content = data["choices"][0].get("message", {}).get("content", "")
+        if isinstance(content, str):
+            ref = extract_image_reference(content)
+            if ref:
+                return decode_image_reference(ref, timeout)
     if isinstance(data.get("data"), list) and data["data"]:
         item = data["data"][0]
     elif isinstance(data.get("images"), list) and data["images"]:
@@ -484,9 +518,8 @@ def parse_image_response(data: dict[str, Any], timeout: int) -> tuple[bytes, str
         item = data
 
     if isinstance(item, str):
-        if item.startswith("http://") or item.startswith("https://"):
-            return download_url(item, timeout), ".png"
-        return base64.b64decode(item), ".png"
+        ref = extract_image_reference(item) or item
+        return decode_image_reference(ref, timeout)
 
     if not isinstance(item, dict):
         raise RuntimeError(f"Unsupported image response shape: {json.dumps(data)[:500]}")
@@ -501,9 +534,7 @@ def parse_image_response(data: dict[str, Any], timeout: int) -> tuple[bytes, str
 
     url = item.get("url") or item.get("image_url")
     if url:
-        parsed = urllib.parse.urlparse(url)
-        ext = Path(parsed.path).suffix or ".png"
-        return download_url(url, timeout), ext
+        return decode_image_reference(url, timeout)
 
     raise RuntimeError(f"No image URL/base64 found in response: {json.dumps(data)[:500]}")
 
@@ -513,18 +544,25 @@ def generate_image(
     image_api_key: str,
     prompt: str,
 ) -> tuple[bytes, str, dict[str, Any]]:
-    endpoint = args.image_endpoint or join_endpoint(args.image_base_url, "/images/generations")
-    payload = {
-        "model": args.image_model,
-        "prompt": prompt,
-        "n": 1,
-    }
-    if args.size:
-        payload["size"] = args.size
-    if args.response_format and args.response_format.lower() != "none":
-        payload["response_format"] = args.response_format
-    if args.aspect_ratio:
-        payload["aspect_ratio"] = args.aspect_ratio
+    if args.image_api_mode == "chat":
+        endpoint = args.image_endpoint or join_endpoint(args.image_base_url, "/chat/completions")
+        payload = {
+            "model": args.image_model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+    else:
+        endpoint = args.image_endpoint or join_endpoint(args.image_base_url, "/images/generations")
+        payload = {
+            "model": args.image_model,
+            "prompt": prompt,
+            "n": 1,
+        }
+        if args.size:
+            payload["size"] = args.size
+        if args.response_format and args.response_format.lower() != "none":
+            payload["response_format"] = args.response_format
+        if args.aspect_ratio:
+            payload["aspect_ratio"] = args.aspect_ratio
     if args.extra_image_params:
         payload.update(json.loads(args.extra_image_params))
     data = http_json(endpoint, payload, image_api_key, args.timeout)
@@ -693,6 +731,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-endpoint", default=env_first("AD_IMAGE_ENDPOINT"))
     parser.add_argument("--image-api-key", default=env_first("AD_IMAGE_API_KEY", "AD_API_KEY", "OPENAI_API_KEY"))
     parser.add_argument("--image-model", default=env_first("AD_IMAGE_MODEL", default=DEFAULT_IMAGE_MODEL))
+    parser.add_argument("--image-api-mode", choices=["chat", "images"], default=env_first("AD_IMAGE_API_MODE", default=DEFAULT_IMAGE_API_MODE), help="Use chat for gpt-image-2-all prompt adherence; use images for /images/generations compatibility.")
     parser.add_argument("--response-format", default=env_first("AD_IMAGE_RESPONSE_FORMAT", default="b64_json"))
     parser.add_argument("--extra-image-params", default=env_first("AD_EXTRA_IMAGE_PARAMS"))
 

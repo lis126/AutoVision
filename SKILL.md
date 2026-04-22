@@ -70,10 +70,11 @@ Built-in model defaults:
 
 ```bash
 AD_IMAGE_MODEL=gpt-image-2-all
+AD_IMAGE_API_MODE=chat
 AD_TEXT_MODEL=gpt-5.4
 ```
 
-`AD_API_BASE_URL` and `AD_API_KEY` can be used when text and image calls share one platform. Override `AD_IMAGE_MODEL` or `AD_TEXT_MODEL` only if the user's platform uses different model names.
+`AD_API_BASE_URL` and `AD_API_KEY` can be used when text and image calls share one platform. Override `AD_IMAGE_MODEL` or `AD_TEXT_MODEL` only if the user's platform uses different model names. Keep `AD_IMAGE_API_MODE=chat` for `gpt-image-2-all`; use `images` only for platforms that require `/images/generations`.
 
 For first-time local deployment, run:
 
@@ -89,7 +90,7 @@ To inspect the effective configuration, run:
 python scripts/run_batch.py doctor
 ```
 
-Do not report models from memory. `doctor` is the source of truth. Built-in defaults are `AD_IMAGE_MODEL=gpt-image-2-all` and `AD_TEXT_MODEL=gpt-5.4`; API base URL and key must come from the user's local config.
+Do not report models from memory. `doctor` is the source of truth. Built-in defaults are `AD_IMAGE_MODEL=gpt-image-2-all`, `AD_IMAGE_API_MODE=chat`, and `AD_TEXT_MODEL=gpt-5.4`; API base URL and key must come from the user's local config.
 
 ## Templates
 
@@ -172,7 +173,8 @@ Re-running the same command resumes from `context.json`.
 By default:
 
 - Text: `POST {base_url}/chat/completions`
-- Image: `POST {base_url}/images/generations`
+- Image with `AD_IMAGE_API_MODE=chat`: `POST {base_url}/chat/completions`
+- Image with `AD_IMAGE_API_MODE=images`: `POST {base_url}/images/generations`
 
 Use `AD_TEXT_ENDPOINT` or `AD_IMAGE_ENDPOINT` for custom third-party paths. Set `AD_IMAGE_RESPONSE_FORMAT=none` if the image API rejects OpenAI-style `response_format`.
 
