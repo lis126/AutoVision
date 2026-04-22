@@ -57,6 +57,7 @@ Infer these from the user request where possible:
 - Total rounds: default `1`.
 - Workspace: default `<current workspace>/open-ad-batch-output`.
 - Cooldown: default `0`.
+- Aspect ratio: treat `--aspect-ratio` as a preference/API hint. The template may instruct the reasoning model to choose the best vertical ratio for the target model and layout.
 
 Required third-party image API config:
 

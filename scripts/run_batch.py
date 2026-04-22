@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_ASPECT_RATIO = "3:4"
-DEFAULT_SIZE = "1024x1536"
+DEFAULT_ASPECT_RATIO = ""
+DEFAULT_SIZE = ""
 DEFAULT_TOTAL = 1
 DEFAULT_COOLDOWN_SECONDS = 0
 DEFAULT_TEMPLATE = "hanfu-character-sheet"
@@ -108,11 +108,12 @@ class SafeFormatDict(dict):
 def template_values(args: argparse.Namespace, round_num: int, used_styles: list[str]) -> dict[str, Any]:
     avoid_styles = used_styles[-8:]
     return {
+        "template": args.template,
         "product": args.product,
         "round": round_num,
         "total": args.total,
-        "aspect_ratio": args.aspect_ratio,
-        "size": args.size,
+        "aspect_ratio": args.aspect_ratio or "由推理模型根据目标图片模型和版式自行选择",
+        "size": args.size or "由推理模型根据目标图片模型自行选择",
         "language": args.language,
         "requirements": args.requirements or "无",
         "role_setting": args.role_setting or "无",
@@ -199,15 +200,20 @@ def load_final_prompt(args: argparse.Namespace) -> str:
 
 def build_text_messages(template: dict[str, Any], values: dict[str, Any]) -> list[dict[str, str]]:
     rendered = render_template_value(template, values)
-    role_title = rendered.get("role_title", "广告提示词策划师")
-    system = rendered.get("system") or f"【{role_title}】\n你负责把广告任务信息转换成可直接用于图片模型的高质量中文海报提示词。只返回严格 JSON。"
-    if "reasoning_model_input" in rendered or "image_prompt_format" in rendered:
+    role_title = rendered.get("role_title", "模板提示词生成器")
+    template_name = rendered.get("template_name") or rendered.get("name") or values.get("template", "")
+    system = rendered.get("system") or (
+        f"你是【{role_title}】。你的任务是根据模板名、输入信息和最终提示词格式，"
+        "输出可直接传给图片模型的最终提示词。只返回严格 JSON，不要解释，不要输出 Markdown。"
+    )
+    if "reasoning_model_input" in rendered or "final_prompt_format" in rendered:
         user = {
+            "template_name": template_name,
             "role_title": f"【{role_title}】",
             "reasoning_model_input": rendered.get("reasoning_model_input", {}),
-            "image_prompt_format": rendered.get("image_prompt_format", {}),
+            "final_prompt_format": rendered.get("final_prompt_format", ""),
             "response_contract": rendered.get("response_contract", {
-                "style": "本轮唯一风格名称",
+                "style": "本轮风格名称，用于历史去重",
                 "final_prompt": "完整图片生成提示词"
             }),
         }
@@ -404,15 +410,19 @@ def infer_brief(
 
 def build_fallback_prompt(args: argparse.Namespace, style: str, used_styles: list[str]) -> str:
     avoid = "、".join(used_styles[-8:]) if used_styles else "无"
-    requirement = f"额外要求：{args.requirements}。" if args.requirements else ""
-    return (
-        f"为商品「{args.product}」生成一张{args.aspect_ratio}竖版中文广告海报。"
-        f"采用与历史风格明显不同的方向，历史风格：{avoid}。"
-        f"本轮方向：{style or '全新视觉方向'}。"
-        f"{requirement}"
-        "画面需要包含清晰中文主标题、短促卖点文案、产品视觉中心、商业海报构图、"
-        "高质量排版、可直接用于社交媒体投放。"
-    )
+    parts = [
+        f"模板：{args.template}",
+        f"输出标识：{args.product}",
+        f"画幅：{args.aspect_ratio or '由推理模型根据目标图片模型和版式自行选择'}",
+        f"本轮方向：{style or '按模板要求生成'}",
+        f"历史需避开：{avoid}",
+    ]
+    if args.role_setting:
+        parts.append(f"角色设定：{args.role_setting}")
+    if args.requirements:
+        parts.append(f"额外要求：{args.requirements}")
+    parts.append("请严格遵循所选模板的最终提示词格式，生成可直接传给图片模型的中文提示词。")
+    return "\n".join(parts)
 
 
 def parse_image_response(data: dict[str, Any], timeout: int) -> tuple[bytes, str]:
@@ -461,8 +471,9 @@ def generate_image(
         "model": args.image_model,
         "prompt": prompt,
         "n": 1,
-        "size": args.size,
     }
+    if args.size:
+        payload["size"] = args.size
     if args.response_format and args.response_format.lower() != "none":
         payload["response_format"] = args.response_format
     if args.aspect_ratio:
@@ -604,8 +615,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(env_first("AD_WORKSPACE", default=str(Path.cwd() / "open-ad-batch-output"))).expanduser(),
     )
     parser.add_argument("--cooldown", type=int, default=int(env_first("AD_COOLDOWN_SECONDS", default=str(DEFAULT_COOLDOWN_SECONDS))))
-    parser.add_argument("--aspect-ratio", default=env_first("AD_ASPECT_RATIO", default=DEFAULT_ASPECT_RATIO))
-    parser.add_argument("--size", default=env_first("AD_IMAGE_SIZE", default=DEFAULT_SIZE))
+    parser.add_argument("--aspect-ratio", default=env_first("AD_ASPECT_RATIO", default=DEFAULT_ASPECT_RATIO), help="Optional ratio hint for templates and APIs. Empty means the reasoning model should choose.")
+    parser.add_argument("--size", default=env_first("AD_IMAGE_SIZE", default=DEFAULT_SIZE), help="Optional image API size. Empty means do not send a size field.")
     parser.add_argument("--language", default=env_first("AD_LANGUAGE", default="zh-CN"))
     parser.add_argument("--requirements", default=env_first("AD_REQUIREMENTS", default=""))
     parser.add_argument("--template", default=env_first("AD_TEMPLATE", "AD_TEMPLATE_NAME", default=DEFAULT_TEMPLATE))
