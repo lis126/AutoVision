@@ -1,0 +1,6 @@
+.env
+.env.*
+!.env.example
+open-ad-batch-output/
+__pycache__/
+*.pyc
