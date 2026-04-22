@@ -32,6 +32,7 @@ DEFAULT_SIZE = ""
 DEFAULT_TOTAL = 1
 DEFAULT_COOLDOWN_SECONDS = 0
 DEFAULT_TEMPLATE = "hanfu-character-sheet"
+DEFAULT_IMAGE_MODEL = "gpt-image-2-all"
 DEFAULT_TEXT_MODEL = "gpt-5.4"
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ENV_SOURCES: dict[str, str] = {}
@@ -278,9 +279,7 @@ def configure(args: argparse.Namespace) -> None:
     api_key = getpass.getpass("API key: ").strip()
     if not api_key:
         raise SystemExit("API key is required.")
-    image_model = input("Image model name: ").strip()
-    if not image_model:
-        raise SystemExit("Image model name is required.")
+    image_model = input(f"Image model name [{DEFAULT_IMAGE_MODEL}]: ").strip() or DEFAULT_IMAGE_MODEL
     text_model = input(f"Text/reasoning model [{DEFAULT_TEXT_MODEL}]: ").strip() or DEFAULT_TEXT_MODEL
     response_format = input("Image response_format [b64_json, or none if unsupported]: ").strip() or "b64_json"
 
@@ -324,8 +323,6 @@ def doctor(args: argparse.Namespace) -> None:
     for key, value, source in rows:
         print(f"- {key}: {value} ({source})")
     problems = []
-    if not args.image_model:
-        problems.append("AD_IMAGE_MODEL is required; there is no built-in image model default.")
     if not (args.image_base_url or args.image_endpoint):
         problems.append("AD_IMAGE_BASE_URL/AD_API_BASE_URL or AD_IMAGE_ENDPOINT is required.")
     if not args.image_api_key:
@@ -695,7 +692,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-base-url", default=env_first("AD_IMAGE_BASE_URL", "AD_API_BASE_URL"))
     parser.add_argument("--image-endpoint", default=env_first("AD_IMAGE_ENDPOINT"))
     parser.add_argument("--image-api-key", default=env_first("AD_IMAGE_API_KEY", "AD_API_KEY", "OPENAI_API_KEY"))
-    parser.add_argument("--image-model", default=env_first("AD_IMAGE_MODEL"))
+    parser.add_argument("--image-model", default=env_first("AD_IMAGE_MODEL", default=DEFAULT_IMAGE_MODEL))
     parser.add_argument("--response-format", default=env_first("AD_IMAGE_RESPONSE_FORMAT", default="b64_json"))
     parser.add_argument("--extra-image-params", default=env_first("AD_EXTRA_IMAGE_PARAMS"))
 
@@ -717,8 +714,6 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.command in {"status", "templates", "configure", "doctor"}:
         return
     missing = []
-    if not args.image_model:
-        missing.append("AD_IMAGE_MODEL or --image-model")
     if not (args.image_endpoint or args.image_base_url):
         missing.append("AD_IMAGE_BASE_URL/AD_API_BASE_URL or --image-endpoint")
     has_final_prompt = bool(args.final_prompt or args.final_prompt_file)

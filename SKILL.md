@@ -59,23 +59,21 @@ Infer these from the user request where possible:
 - Cooldown: default `0`.
 - Aspect ratio: treat `--aspect-ratio` as a preference/API hint. The template may instruct the reasoning model to choose the best vertical ratio for the target model and layout.
 
-Required third-party image API config:
+Required third-party API config:
 
 ```bash
 AD_IMAGE_BASE_URL=https://your-platform.example/v1
 AD_IMAGE_API_KEY=...
-AD_IMAGE_MODEL=your-image-model
 ```
 
-Recommended text/reasoning API config:
+Built-in model defaults:
 
 ```bash
-AD_TEXT_BASE_URL=https://your-platform.example/v1
-AD_TEXT_API_KEY=...
+AD_IMAGE_MODEL=gpt-image-2-all
 AD_TEXT_MODEL=gpt-5.4
 ```
 
-`AD_API_BASE_URL` and `AD_API_KEY` can be used when text and image calls share one platform.
+`AD_API_BASE_URL` and `AD_API_KEY` can be used when text and image calls share one platform. Override `AD_IMAGE_MODEL` or `AD_TEXT_MODEL` only if the user's platform uses different model names.
 
 For first-time local deployment, run:
 
@@ -83,7 +81,7 @@ For first-time local deployment, run:
 python scripts/run_batch.py configure
 ```
 
-This prompts for API base URL, API key, image model, and text/reasoning model, then writes a local `.env`. The default text/reasoning model is `gpt-5.4`. Do not commit `.env`.
+This prompts for API base URL, API key, image model, and text/reasoning model, then writes a local `.env`. The default image model is `gpt-image-2-all`; the default text/reasoning model is `gpt-5.4`. Do not commit `.env`.
 
 To inspect the effective configuration, run:
 
@@ -91,7 +89,7 @@ To inspect the effective configuration, run:
 python scripts/run_batch.py doctor
 ```
 
-Do not report models from memory. `doctor` is the source of truth. This skill has no built-in image model default; `AD_IMAGE_MODEL` must come from the user's platform config. The text/reasoning fallback defaults to `gpt-5.4` only when `AD_TEXT_MODEL` is not set.
+Do not report models from memory. `doctor` is the source of truth. Built-in defaults are `AD_IMAGE_MODEL=gpt-image-2-all` and `AD_TEXT_MODEL=gpt-5.4`; API base URL and key must come from the user's local config.
 
 ## Templates
 
