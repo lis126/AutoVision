@@ -85,6 +85,14 @@ python scripts/run_batch.py configure
 
 This prompts for API base URL, API key, image model, and text/reasoning model, then writes a local `.env`. The default text/reasoning model is `gpt-5.4`. Do not commit `.env`.
 
+To inspect the effective configuration, run:
+
+```bash
+python scripts/run_batch.py doctor
+```
+
+Do not report models from memory. `doctor` is the source of truth. This skill has no built-in image model default; `AD_IMAGE_MODEL` must come from the user's platform config. The text/reasoning fallback defaults to `gpt-5.4` only when `AD_TEXT_MODEL` is not set.
+
 ## Templates
 
 Built-in templates live in `assets/templates/`.
@@ -183,4 +191,5 @@ After another OpenClaw installs the repo, the expected first command is:
 
 ```bash
 python scripts/run_batch.py configure
+python scripts/run_batch.py doctor
 ```

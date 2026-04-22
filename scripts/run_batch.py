@@ -34,6 +34,7 @@ DEFAULT_COOLDOWN_SECONDS = 0
 DEFAULT_TEMPLATE = "hanfu-character-sheet"
 DEFAULT_TEXT_MODEL = "gpt-5.4"
 SKILL_ROOT = Path(__file__).resolve().parents[1]
+ENV_SOURCES: dict[str, str] = {}
 
 
 def load_env_file(path: Path) -> None:
@@ -48,6 +49,7 @@ def load_env_file(path: Path) -> None:
         value = value.strip().strip('"').strip("'")
         if key and key not in os.environ:
             os.environ[key] = value
+            ENV_SOURCES[key] = str(path)
 
 
 def load_env_defaults() -> None:
@@ -61,6 +63,13 @@ def env_first(*names: str, default: str | None = None) -> str | None:
         if value:
             return value
     return default
+
+
+def env_source(*names: str) -> str:
+    for name in names:
+        if os.environ.get(name):
+            return ENV_SOURCES.get(name, "environment")
+    return "default" if names else "-"
 
 
 def prompt_if_missing(value: str | None, label: str, interactive: bool, secret: bool = False) -> str:
@@ -286,6 +295,47 @@ def configure(args: argparse.Namespace) -> None:
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("Config saved.")
+
+
+def mask_secret(value: str | None) -> str:
+    if not value:
+        return "missing"
+    if len(value) <= 8:
+        return "***"
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def doctor(args: argparse.Namespace) -> None:
+    rows = [
+        ("skill_root", str(SKILL_ROOT), "detected"),
+        ("workspace", str(args.workspace), "argument/default"),
+        ("template", args.template, env_source("AD_TEMPLATE", "AD_TEMPLATE_NAME")),
+        ("api_base_url", args.image_base_url or args.text_base_url or "missing", env_source("AD_IMAGE_BASE_URL", "AD_TEXT_BASE_URL", "AD_API_BASE_URL")),
+        ("api_key", mask_secret(args.image_api_key or args.text_api_key), env_source("AD_IMAGE_API_KEY", "AD_TEXT_API_KEY", "AD_API_KEY", "OPENAI_API_KEY")),
+        ("text_model", args.text_model or "missing", env_source("AD_TEXT_MODEL")),
+        ("image_model", args.image_model or "missing", env_source("AD_IMAGE_MODEL")),
+        ("image_endpoint", args.image_endpoint or "OpenAI-compatible /images/generations", env_source("AD_IMAGE_ENDPOINT")),
+        ("text_endpoint", args.text_endpoint or "OpenAI-compatible /chat/completions", env_source("AD_TEXT_ENDPOINT")),
+        ("image_response_format", args.response_format or "not sent", env_source("AD_IMAGE_RESPONSE_FORMAT")),
+        ("aspect_ratio", args.aspect_ratio or "not sent; reasoning model chooses", env_source("AD_ASPECT_RATIO")),
+        ("size", args.size or "not sent", env_source("AD_IMAGE_SIZE")),
+    ]
+    print("Open Ad Batch effective configuration:")
+    for key, value, source in rows:
+        print(f"- {key}: {value} ({source})")
+    problems = []
+    if not args.image_model:
+        problems.append("AD_IMAGE_MODEL is required; there is no built-in image model default.")
+    if not (args.image_base_url or args.image_endpoint):
+        problems.append("AD_IMAGE_BASE_URL/AD_API_BASE_URL or AD_IMAGE_ENDPOINT is required.")
+    if not args.image_api_key:
+        problems.append("AD_IMAGE_API_KEY/AD_API_KEY is required.")
+    if problems:
+        print("\nProblems:")
+        for problem in problems:
+            print(f"- {problem}")
+        raise SystemExit(1)
+    print("\nConfig looks runnable.")
 
 
 def log(workspace: Path, message: str) -> None:
@@ -622,7 +672,7 @@ def run(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Batch-generate Chinese ad posters with a third-party API.")
-    parser.add_argument("command", nargs="?", choices=["run", "status", "templates", "configure"], default="run")
+    parser.add_argument("command", nargs="?", choices=["run", "status", "templates", "configure", "doctor"], default="run")
     parser.add_argument("--config-path", default=env_first("AD_CONFIG_PATH"))
     parser.add_argument("--product", default=env_first("AD_PRODUCT"))
     parser.add_argument("--total", type=int, default=int(env_first("AD_TOTAL", default=str(DEFAULT_TOTAL))))
@@ -664,7 +714,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    if args.command in {"status", "templates", "configure"}:
+    if args.command in {"status", "templates", "configure", "doctor"}:
         return
     missing = []
     if not args.image_model:
@@ -693,6 +743,8 @@ def main() -> None:
         list_templates(args.workspace)
     elif args.command == "configure":
         configure(args)
+    elif args.command == "doctor":
+        doctor(args)
     else:
         run(args)
 
