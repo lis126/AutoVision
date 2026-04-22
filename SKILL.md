@@ -1,11 +1,11 @@
 ---
 name: open_ad_batch
-description: Generate images by selecting a named prompt template and role setting, using this skill's third-party API script. Use when the user wants OpenClaw to turn a template name plus character/product/ad setting into final image prompts and batch-generate images without OpenClaw image_generate.
+description: Generate images by selecting a named prompt template and role setting, using Codex CLI by default or an optional API backend. Use when the user wants OpenClaw to turn a template name plus character/product/ad setting into final image prompts and batch-generate images without OpenClaw image_generate.
 ---
 
 # Open Ad Batch
 
-Use this skill to run a template-driven image generation batch through `scripts/run_batch.py`. Do not use OpenClaw `image_generate` for this workflow unless the user explicitly redirects you; image generation is handled by this skill's third-party HTTP API caller.
+Use this skill to run a template-driven image generation batch through `scripts/run_batch.py`. Do not use OpenClaw `image_generate` for this workflow unless the user explicitly redirects you. Image generation defaults to Codex CLI: the script sends the final prompt to `codex exec` via stdin and copies the latest generated image from Codex's generated image folder.
 
 ## Core Flow
 
@@ -14,7 +14,7 @@ The intended prompt flow is:
 ```text
 template name + role setting
   -> isolated prompt builder returns final_prompt
-  -> script sends final_prompt to the third-party image model
+  -> script sends final_prompt to Codex CLI by default
 ```
 
 In OpenClaw, prefer `sessions_spawn` for the prompt-builder step when the tool is available. It creates an isolated background agent run and keeps prompt construction out of the main session context. The script's own text API call remains the fallback when `sessions_spawn` is unavailable or the user wants the script to be self-contained.
@@ -59,14 +59,24 @@ Infer these from the user request where possible:
 - Cooldown: default `0`.
 - Aspect ratio: treat `--aspect-ratio` as a preference/API hint. The template may instruct the reasoning model to choose the best vertical ratio for the target model and layout.
 
-Required third-party API config:
+Default image backend:
 
 ```bash
+AD_IMAGE_BACKEND=codex
+AD_CODEX_COMMAND=codex
+```
+
+Codex CLI must be installed and available on `PATH`. No image API key is required for the default backend.
+
+Optional third-party API backend:
+
+```bash
+AD_IMAGE_BACKEND=api
 AD_IMAGE_BASE_URL=https://your-platform.example/v1
 AD_IMAGE_API_KEY=...
 ```
 
-Built-in model defaults:
+API backend model defaults:
 
 ```bash
 AD_IMAGE_MODEL=gpt-image-2-all
@@ -90,7 +100,7 @@ To inspect the effective configuration, run:
 python scripts/run_batch.py doctor
 ```
 
-Do not report models from memory. `doctor` is the source of truth. Built-in defaults are `AD_IMAGE_MODEL=gpt-image-2-all`, `AD_IMAGE_API_MODE=chat`, and `AD_TEXT_MODEL=gpt-5.4`; API base URL and key must come from the user's local config.
+Do not report models from memory. `doctor` is the source of truth. Built-in defaults are `AD_IMAGE_BACKEND=codex`, `AD_IMAGE_MODEL=gpt-image-2-all`, `AD_IMAGE_API_MODE=chat`, and `AD_TEXT_MODEL=gpt-5.4`; API base URL and key are only required when `AD_IMAGE_BACKEND=api`.
 
 ## Templates
 

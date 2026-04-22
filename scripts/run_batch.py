@@ -17,6 +17,8 @@ import json
 import mimetypes
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -32,6 +34,7 @@ DEFAULT_SIZE = ""
 DEFAULT_TOTAL = 1
 DEFAULT_COOLDOWN_SECONDS = 0
 DEFAULT_TEMPLATE = "hanfu-character-sheet"
+DEFAULT_IMAGE_BACKEND = "codex"
 DEFAULT_IMAGE_MODEL = "gpt-image-2-all"
 DEFAULT_IMAGE_API_MODE = "chat"
 DEFAULT_TEXT_MODEL = "gpt-5.4"
@@ -72,6 +75,10 @@ def env_source(*names: str) -> str:
         if os.environ.get(name):
             return ENV_SOURCES.get(name, "environment")
     return "default" if names else "-"
+
+
+def shutil_which(command: str) -> str | None:
+    return shutil.which(command)
 
 
 def prompt_if_missing(value: str | None, label: str, interactive: bool, secret: bool = False) -> str:
@@ -313,6 +320,7 @@ def doctor(args: argparse.Namespace) -> None:
         ("template", args.template, env_source("AD_TEMPLATE", "AD_TEMPLATE_NAME")),
         ("api_base_url", args.image_base_url or args.text_base_url or "missing", env_source("AD_IMAGE_BASE_URL", "AD_TEXT_BASE_URL", "AD_API_BASE_URL")),
         ("api_key", mask_secret(args.image_api_key or args.text_api_key), env_source("AD_IMAGE_API_KEY", "AD_TEXT_API_KEY", "AD_API_KEY", "OPENAI_API_KEY")),
+        ("image_backend", args.image_backend, env_source("AD_IMAGE_BACKEND")),
         ("text_model", args.text_model or "missing", env_source("AD_TEXT_MODEL")),
         ("image_model", args.image_model or "missing", env_source("AD_IMAGE_MODEL")),
         ("image_api_mode", args.image_api_mode, env_source("AD_IMAGE_API_MODE")),
@@ -326,10 +334,12 @@ def doctor(args: argparse.Namespace) -> None:
     for key, value, source in rows:
         print(f"- {key}: {value} ({source})")
     problems = []
-    if not (args.image_base_url or args.image_endpoint):
+    if args.image_backend == "api" and not (args.image_base_url or args.image_endpoint):
         problems.append("AD_IMAGE_BASE_URL/AD_API_BASE_URL or AD_IMAGE_ENDPOINT is required.")
-    if not args.image_api_key:
+    if args.image_backend == "api" and not args.image_api_key:
         problems.append("AD_IMAGE_API_KEY/AD_API_KEY is required.")
+    if args.image_backend == "codex" and not shutil_which(args.codex_command):
+        problems.append(f"Codex CLI command not found: {args.codex_command}")
     if problems:
         print("\nProblems:")
         for problem in problems:
@@ -380,6 +390,59 @@ def http_json(
         return json.loads(text)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Non-JSON response from {url}: {text[:500]}") from exc
+
+
+def find_latest_codex_image(since_ts: float | None = None) -> Path | None:
+    roots = [
+        Path.home() / ".codex" / "generated_images",
+        Path.cwd() / "generated_images",
+    ]
+    candidates: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for pattern in ("**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.webp"):
+            candidates.extend(path for path in root.glob(pattern) if path.is_file())
+    if since_ts is not None:
+        candidates = [path for path in candidates if path.stat().st_mtime >= since_ts]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def run_codex_cli(args: argparse.Namespace, prompt: str, round_dir: Path) -> tuple[bytes, str, dict[str, Any]]:
+    prompt_file = round_dir / "_codex_prompt.txt"
+    prompt_file.write_text(prompt, encoding="utf-8")
+    started = time.time()
+    cmd = [
+        args.codex_command,
+        "exec",
+        "--full-auto",
+        "--skip-git-repo-check",
+        "--cd",
+        str(round_dir),
+    ]
+    with prompt_file.open("r", encoding="utf-8") as stdin:
+        result = subprocess.run(
+            cmd,
+            stdin=stdin,
+            text=True,
+            capture_output=True,
+            timeout=args.codex_timeout,
+        )
+    (round_dir / "codex_stdout.txt").write_text(result.stdout or "", encoding="utf-8")
+    (round_dir / "codex_stderr.txt").write_text(result.stderr or "", encoding="utf-8")
+    if result.returncode != 0:
+        raise RuntimeError(f"Codex CLI failed with exit code {result.returncode}. See codex_stderr.txt.")
+    image_path = find_latest_codex_image(started)
+    if not image_path:
+        raise RuntimeError("Codex CLI completed, but no generated image was found in ~/.codex/generated_images.")
+    return image_path.read_bytes(), image_path.suffix or ".png", {
+        "backend": "codex",
+        "source_image_path": str(image_path),
+        "stdout_path": str(round_dir / "codex_stdout.txt"),
+        "stderr_path": str(round_dir / "codex_stderr.txt"),
+    }
 
 
 def download_url(url: str, timeout: int) -> bytes:
@@ -570,6 +633,19 @@ def generate_image(
     return image_bytes, ext, data
 
 
+def generate_image_with_backend(
+    args: argparse.Namespace,
+    image_api_key: str | None,
+    prompt: str,
+    round_dir: Path,
+) -> tuple[bytes, str, dict[str, Any]]:
+    if args.image_backend == "codex":
+        return run_codex_cli(args, prompt, round_dir)
+    if not image_api_key:
+        raise RuntimeError("Image API key is required when --image-backend api.")
+    return generate_image(args, image_api_key, prompt)
+
+
 def load_context(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     default = {
         "product": args.product,
@@ -599,7 +675,9 @@ def status(args: argparse.Namespace) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    image_api_key = prompt_if_missing(args.image_api_key, "Image API key", args.interactive, secret=True)
+    image_api_key = args.image_api_key
+    if args.image_backend == "api":
+        image_api_key = prompt_if_missing(args.image_api_key, "Image API key", args.interactive, secret=True)
     text_api_key = args.text_api_key or image_api_key
     args.product = prompt_if_missing(args.product, "Product name", args.interactive)
     args.workspace.mkdir(parents=True, exist_ok=True)
@@ -641,7 +719,7 @@ def run(args: argparse.Namespace) -> None:
             prompt_path.write_text(brief["prompt"], encoding="utf-8")
 
             log(args.workspace, f"Round {round_num}/{args.total}: generating image")
-            image_bytes, ext, raw = generate_image(args, image_api_key, brief["prompt"])
+            image_bytes, ext, raw = generate_image_with_backend(args, image_api_key, brief["prompt"], round_dir)
             image_path = round_dir / f"image{ext}"
             image_path.write_bytes(image_bytes)
 
@@ -654,6 +732,7 @@ def run(args: argparse.Namespace) -> None:
                 "prompt_path": str(prompt_path),
                 "image_path": str(image_path),
                 "image_model": args.image_model,
+                "image_backend": args.image_backend,
                 "text_model": args.text_model if not args.no_infer else None,
                 "template": template.get("name", args.template),
                 "template_path": template.get("_path"),
@@ -727,6 +806,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--final-prompt", default=env_first("AD_FINAL_PROMPT", default=""))
     parser.add_argument("--final-prompt-file", default=env_first("AD_FINAL_PROMPT_FILE"))
 
+    parser.add_argument("--image-backend", choices=["codex", "api"], default=env_first("AD_IMAGE_BACKEND", default=DEFAULT_IMAGE_BACKEND), help="Default codex uses Codex CLI; api uses the configured HTTP image API.")
+    parser.add_argument("--codex-command", default=env_first("AD_CODEX_COMMAND", default="codex"))
+    parser.add_argument("--codex-timeout", type=int, default=int(env_first("AD_CODEX_TIMEOUT_SECONDS", default="900")))
+
     parser.add_argument("--image-base-url", default=env_first("AD_IMAGE_BASE_URL", "AD_API_BASE_URL"))
     parser.add_argument("--image-endpoint", default=env_first("AD_IMAGE_ENDPOINT"))
     parser.add_argument("--image-api-key", default=env_first("AD_IMAGE_API_KEY", "AD_API_KEY", "OPENAI_API_KEY"))
@@ -753,7 +836,7 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.command in {"status", "templates", "configure", "doctor"}:
         return
     missing = []
-    if not (args.image_endpoint or args.image_base_url):
+    if args.image_backend == "api" and not (args.image_endpoint or args.image_base_url):
         missing.append("AD_IMAGE_BASE_URL/AD_API_BASE_URL or --image-endpoint")
     has_final_prompt = bool(args.final_prompt or args.final_prompt_file)
     if not has_final_prompt and not args.no_infer and args.text_model and not (args.text_endpoint or args.text_base_url):
