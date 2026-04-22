@@ -130,9 +130,10 @@ Do not report models from memory. `doctor` is the source of truth. Built-in defa
 
 Built-in templates live in `assets/templates/`.
 
-Current built-in template:
+Current built-in templates:
 
 - `hanfu-character-sheet`: 汉服角色设定集海报。输入角色设定，输出一个可直接传给图片模型的最终提示词。
+- `oriental-fantasy-beauty-character-sheet`: 东方古风世界奇幻绝代美人角色设定集海报。输入角色设定，输出一个可直接传给图片模型的最终提示词。
 
 List templates:
 
